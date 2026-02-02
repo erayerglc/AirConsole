@@ -263,19 +263,27 @@
     }
 
     let holdIntervals = {};
+    let activeTouches = {}; // Track touch identifiers for multi-touch
 
     function setupHoldButton(btnId, data) {
       const btn = document.getElementById(btnId);
       if (!btn) return;
 
       const startHold = (e) => {
-        e.preventDefault();
+        if (e.type === 'touchstart') {
+          // Store the touch identifier
+          activeTouches[btnId] = e.changedTouches[0].identifier;
+        }
         send(data);
+        if (holdIntervals[btnId]) clearInterval(holdIntervals[btnId]);
         holdIntervals[btnId] = setInterval(() => send(data), 80);
       };
 
       const stopHold = (e) => {
-        e.preventDefault();
+        if (e.type === 'touchend' || e.type === 'touchcancel') {
+          if (activeTouches[btnId] !== e.changedTouches[0].identifier) return;
+          delete activeTouches[btnId];
+        }
         if (holdIntervals[btnId]) {
           clearInterval(holdIntervals[btnId]);
           delete holdIntervals[btnId];
@@ -285,9 +293,9 @@
       btn.addEventListener('mousedown', startHold);
       btn.addEventListener('mouseup', stopHold);
       btn.addEventListener('mouseleave', stopHold);
-      btn.addEventListener('touchstart', startHold);
-      btn.addEventListener('touchend', stopHold);
-      btn.addEventListener('touchcancel', stopHold);
+      btn.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(e); }, { passive: false });
+      btn.addEventListener('touchend', (e) => { e.preventDefault(); stopHold(e); }, { passive: false });
+      btn.addEventListener('touchcancel', (e) => { e.preventDefault(); stopHold(e); }, { passive: false });
     }
 
     function fpsUI(initialWinCondition, players, initialMap) {
@@ -498,17 +506,16 @@
 
     function setupSwipeZone(zoneId, callback) {
       const zone = document.getElementById(zoneId);
-      let active = false;
+      let activeTouchId = null;
       let lastX = 0, lastY = 0;
 
-      const onStart = (clientX, clientY) => {
-        active = true;
+      const onStart = (clientX, clientY, id) => {
+        activeTouchId = id;
         lastX = clientX;
         lastY = clientY;
       };
 
       const onMove = (clientX, clientY) => {
-        if (!active) return;
         const dx = clientX - lastX;
         const dy = clientY - lastY;
         lastX = clientX;
@@ -516,37 +523,50 @@
         callback({ x: dx, y: dy });
       };
 
-      const onEnd = () => { active = false; };
-
       zone.addEventListener('touchstart', e => {
-        // Only trigger if not touching the fire button
-        if (e.target.id === 'btn-fire') return;
-        onStart(e.touches[0].clientX, e.touches[0].clientY);
+        if (e.target.id === 'btn-fire' || activeTouchId !== null) return;
+        const touch = e.changedTouches[0];
+        onStart(touch.clientX, touch.clientY, touch.identifier);
       }, { passive: true });
+
       zone.addEventListener('touchmove', e => {
-        if (!active) return;
-        onMove(e.touches[0].clientX, e.touches[0].clientY);
+        if (activeTouchId === null) return;
+        for (let i = 0; i < e.changedTouches.length; i++) {
+          const t = e.changedTouches[i];
+          if (t.identifier === activeTouchId) {
+            onMove(t.clientX, t.clientY);
+          }
+        }
       }, { passive: true });
+
+      const onEnd = e => {
+        for (let i = 0; i < e.changedTouches.length; i++) {
+          if (e.changedTouches[i].identifier === activeTouchId) {
+            activeTouchId = null;
+          }
+        }
+      };
       zone.addEventListener('touchend', onEnd);
       zone.addEventListener('touchcancel', onEnd);
 
       // Mouse support
       zone.addEventListener('mousedown', e => {
-        if (e.target.id === 'btn-fire') return;
-        onStart(e.clientX, e.clientY);
+        if (e.target.id === 'btn-fire' || activeTouchId !== null) return;
+        onStart(e.clientX, e.clientY, 'mouse');
       });
-      window.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
-      window.addEventListener('mouseup', onEnd);
+      window.addEventListener('mousemove', e => {
+        if (activeTouchId === 'mouse') onMove(e.clientX, e.clientY);
+      });
+      window.addEventListener('mouseup', () => { if (activeTouchId === 'mouse') activeTouchId = null; });
     }
 
     function setupJoystick(baseId, stickId, callback) {
       const base = document.getElementById(baseId);
       const stick = document.getElementById(stickId);
-      let active = false;
-      const radius = 90; // Increased to half of 180px base
+      let activeTouchId = null;
+      const radius = 90;
 
-      const handleInput = (clientX, clientY) => {
-        if (!active) return;
+      const handleMove = (clientX, clientY) => {
         const rect = base.getBoundingClientRect();
         const centerX = rect.left + rect.width / 2;
         const centerY = rect.top + rect.height / 2;
@@ -561,39 +581,62 @@
         }
 
         stick.style.transform = `translate(${dx}px, ${dy}px)`;
-
-        // Normalize to -1 to 1
         callback({ x: dx / radius, y: dy / radius });
       };
 
-      // Touch events
-      base.addEventListener('touchstart', (e) => {
-        active = true;
+      base.addEventListener('touchstart', e => {
+        if (activeTouchId !== null) return;
         e.preventDefault();
-        handleInput(e.targetTouches[0].clientX, e.targetTouches[0].clientY);
-      });
-      base.addEventListener('touchmove', (e) => {
-        e.preventDefault();
-        handleInput(e.targetTouches[0].clientX, e.targetTouches[0].clientY);
-      });
-      base.addEventListener('touchend', () => { active = false; stick.style.transform = `translate(0, 0)`; callback({ x: 0, y: 0 }); });
-      base.addEventListener('touchcancel', () => { active = false; stick.style.transform = `translate(0, 0)`; callback({ x: 0, y: 0 }); });
+        const touch = e.changedTouches[0];
+        activeTouchId = touch.identifier;
+        handleMove(touch.clientX, touch.clientY);
+      }, { passive: false });
 
-      // Mouse events
-      base.addEventListener('mousedown', (e) => {
-        active = true;
-        handleInput(e.clientX, e.clientY);
-      });
-      window.addEventListener('mousemove', (e) => {
-        if (active) handleInput(e.clientX, e.clientY);
-      });
-      window.addEventListener('mouseup', () => {
-        if (active) {
-          active = false;
+      base.addEventListener('touchmove', e => {
+        if (activeTouchId === null) return;
+        e.preventDefault();
+        for (let i = 0; i < e.changedTouches.length; i++) {
+          const t = e.changedTouches[i];
+          if (t.identifier === activeTouchId) {
+            handleMove(t.clientX, t.clientY);
+          }
+        }
+      }, { passive: false });
+
+      const stop = e => {
+        if (activeTouchId === null) return;
+        let released = false;
+        if (e.type.startsWith('touch')) {
+          for (let i = 0; i < e.changedTouches.length; i++) {
+            if (e.changedTouches[i].identifier === activeTouchId) {
+              released = true;
+              break;
+            }
+          }
+        } else {
+          released = true;
+        }
+
+        if (released) {
+          activeTouchId = null;
           stick.style.transform = `translate(0, 0)`;
           callback({ x: 0, y: 0 });
         }
+      };
+
+      base.addEventListener('touchend', stop);
+      base.addEventListener('touchcancel', stop);
+
+      // Mouse support
+      base.addEventListener('mousedown', e => {
+        if (activeTouchId !== null) return;
+        activeTouchId = 'mouse';
+        handleMove(e.clientX, e.clientY);
       });
+      window.addEventListener('mousemove', e => {
+        if (activeTouchId === 'mouse') handleMove(e.clientX, e.clientY);
+      });
+      window.addEventListener('mouseup', stop);
     }
 
     socket.on("gameStartError", (msg) => { alert(msg); });
