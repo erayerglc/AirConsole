@@ -386,6 +386,18 @@
 
       .label { color: #666; font-size: 10px; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 1px; }
 
+      #swipe-zone {
+        flex: 1;
+        height: 100%;
+        background: rgba(255,255,255,0.02);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        position: relative;
+        border-left: 1px solid rgba(255,255,255,0.1);
+      }
+
       .game-menu { 
         display: flex; 
         justify-content: center; 
@@ -401,8 +413,8 @@
         <div class="game-title">🔫 FPS ARENA 3D</div>
 
         <div id="controls-layout">
-          <!-- Move Area -->
-          <div class="joystick-container">
+          <!-- Move Area (Left) -->
+          <div class="joystick-container" style="flex:1;">
             <div class="label">Move</div>
             <div class="joystick-base" id="moveBase">
               <div class="joystick-stick" id="moveStick"></div>
@@ -410,12 +422,9 @@
             <button class="action-btn jump-btn" id="btn-jump">JUMP</button>
           </div>
 
-          <!-- Aim Area -->
-          <div class="joystick-container">
-            <div class="label">Aim</div>
-            <div class="joystick-base" id="lookBase">
-              <div class="joystick-stick" id="lookStick"></div>
-            </div>
+          <!-- Aim Area (Right - Swipe to Aim) -->
+          <div id="swipe-zone">
+            <div class="label" style="opacity:0.5;">Swipe here to Aim</div>
             <button class="action-btn fire-btn" id="btn-fire">FIRE</button>
           </div>
         </div>
@@ -458,8 +467,12 @@
         send({ moveX: v.x, moveY: v.y });
       });
 
-      setupJoystick('lookBase', 'lookStick', (v) => {
-        send({ lookX: v.x, lookY: v.y });
+      setupJoystick('moveBase', 'moveStick', (v) => {
+        send({ moveX: v.x, moveY: v.y });
+      });
+
+      setupSwipeZone('swipe-zone', (delta) => {
+        send({ lx: delta.x, ly: delta.y });
       });
 
       // Jump button
@@ -481,6 +494,49 @@
         document.getElementById('restartBtn').onclick = () => socket.emit('restartGame');
         document.getElementById('exitBtn').onclick = () => socket.emit('exitGame');
       }
+    }
+
+    function setupSwipeZone(zoneId, callback) {
+      const zone = document.getElementById(zoneId);
+      let active = false;
+      let lastX = 0, lastY = 0;
+
+      const onStart = (clientX, clientY) => {
+        active = true;
+        lastX = clientX;
+        lastY = clientY;
+      };
+
+      const onMove = (clientX, clientY) => {
+        if (!active) return;
+        const dx = clientX - lastX;
+        const dy = clientY - lastY;
+        lastX = clientX;
+        lastY = clientY;
+        callback({ x: dx, y: dy });
+      };
+
+      const onEnd = () => { active = false; };
+
+      zone.addEventListener('touchstart', e => {
+        // Only trigger if not touching the fire button
+        if (e.target.id === 'btn-fire') return;
+        onStart(e.touches[0].clientX, e.touches[0].clientY);
+      }, { passive: true });
+      zone.addEventListener('touchmove', e => {
+        if (!active) return;
+        onMove(e.touches[0].clientX, e.touches[0].clientY);
+      }, { passive: true });
+      zone.addEventListener('touchend', onEnd);
+      zone.addEventListener('touchcancel', onEnd);
+
+      // Mouse support
+      zone.addEventListener('mousedown', e => {
+        if (e.target.id === 'btn-fire') return;
+        onStart(e.clientX, e.clientY);
+      });
+      window.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
+      window.addEventListener('mouseup', onEnd);
     }
 
     function setupJoystick(baseId, stickId, callback) {

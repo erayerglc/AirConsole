@@ -148,6 +148,7 @@ export default function (playersList = [], container, THREE_LIB, mapConfig) {
     players[p.id] = {
       id: p.id, mesh: g, color: colors[i % colors.length], pos: getSafeSpawn(), velY: 0, onGround: true,
       meshY: 0, cameraY: 1.6, pitch: 0, moveIn: { x: 0, y: 0 }, lookIn: { x: 0, y: 0 },
+      lx: 0, ly: 0, // Look deltas (for swipe-aim)
       hp: 100, alive: true, respawn: 0, shootCd: 0, weapon: 'normal', shake: 0
     };
     players[p.id].meshY = players[p.id].pos.y;
@@ -159,6 +160,7 @@ export default function (playersList = [], container, THREE_LIB, mapConfig) {
     const p = players[id]; if (!p || !p.alive) return;
     if (d.moveX !== undefined) p.moveIn.x = d.moveX; if (d.moveY !== undefined) p.moveIn.y = d.moveY;
     if (d.lookX !== undefined) p.lookIn.x = d.lookX; if (d.lookY !== undefined) p.lookIn.y = d.lookY;
+    if (d.lx !== undefined) p.lx += d.lx; if (d.ly !== undefined) p.ly += d.ly;
     if (d.jump && p.onGround) { p.velY = 0.35; p.onGround = false; }
     if (d.shoot && p.shootCd <= 0) {
       const pow = p.weapon === 'power';
@@ -179,7 +181,18 @@ export default function (playersList = [], container, THREE_LIB, mapConfig) {
         return;
       }
       if (p.shootCd > 0) p.shootCd--; if (p.shake > 0) p.shake *= 0.85;
-      p.mesh.rotation.y -= p.lookIn.x * 0.12; p.pitch = THREE.MathUtils.clamp(p.pitch - p.lookIn.y * 0.12, -1.4, 1.4);
+
+      // Apply Joystick look
+      p.mesh.rotation.y -= p.lookIn.x * 0.12;
+      p.pitch = THREE.MathUtils.clamp(p.pitch - p.lookIn.y * 0.12, -1.4, 1.4);
+
+      // Apply Swipe look (deltas)
+      if (p.lx !== 0 || p.ly !== 0) {
+        p.mesh.rotation.y -= p.lx * 0.005;
+        p.pitch = THREE.MathUtils.clamp(p.pitch - p.ly * 0.005, -1.4, 1.4);
+        p.lx = 0; p.ly = 0; // Reset after applying
+      }
+
       const move = new THREE.Vector3().addScaledVector(new THREE.Vector3(0, 0, -1).applyEuler(p.mesh.rotation), -p.moveIn.y).addScaledVector(new THREE.Vector3(1, 0, 0).applyEuler(p.mesh.rotation), p.moveIn.x).multiplyScalar(0.38);
 
       p.velY -= GRAVITY; p.pos.y += p.velY; if (p.pos.y < 0) { p.pos.y = 0; p.velY = 0; p.onGround = true; }
