@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Controller</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background: #111;
+      color: white;
+      font-family: Arial;
+      text-align: center;
+      margin: 0;
+      padding: 10px;
+      min-height: 100vh;
+    }
+
+    button {
+      font-size: 20px;
+      padding: 15px;
+      margin: 10px;
+      cursor: pointer;
+    }
+
+    input {
+      font-size: 18px;
+      padding: 10px;
+      margin: 5px;
+    }
+
+    .admin-badge {
+      background: linear-gradient(#ffd700, #b8860b);
+      color: #000;
+      padding: 3px 8px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .game-select-btn {
+      width: 140px;
+      height: 100px;
+      font-size: 16px;
+      background: linear-gradient(#444, #222);
+      color: white;
+      border: 2px solid #666;
+      border-radius: 15px;
+      margin: 10px;
+    }
+
+    .game-select-btn:active {
+      background: linear-gradient(#555, #333);
+    }
+
+    .admin-controls {
+      margin-top: 20px;
+      padding: 15px;
+      background: rgba(255, 215, 0, 0.1);
+      border-radius: 10px;
+      border: 1px solid #ffd700;
+    }
+
+    .menu-btn {
+      width: 60px;
+      height: 40px;
+      font-size: 12px;
+      background: linear-gradient(#555, #333);
+      color: white;
+      border: 1px solid #777;
+      border-radius: 8px;
+      margin: 5px;
+    }
+
+    .menu-btn.exit {
+      background: linear-gradient(#a44, #622);
+    }
+
+    .menu-btn.restart {
+      background: linear-gradient(#44a, #226);
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>Controller</h2>
+  <div id="ui">Loading...</div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    console.log("controller loaded");
+
+    const socket = io();
+    const ui = document.getElementById("ui");
+
+    let isAdmin = false;
+    let currentGame = null;
+
+    ui.innerHTML = `
+  <input id="name" placeholder="Name"><br>
+  <input id="code" placeholder="Room Code"><br>
+  <button id="joinBtn">Join</button>
+  <div id="errorMsg" style="color:red;margin-top:10px;"></div>
+`;
+
+    document.getElementById("joinBtn").onclick = () => {
+      console.log("join clicked");
+      const nameInput = document.getElementById("name");
+      const codeInput = document.getElementById("code");
+      document.getElementById("errorMsg").textContent = "";
+      socket.emit("joinRoom", {
+        code: codeInput.value.toUpperCase(),
+        name: nameInput.value || "Player"
+      });
+    };
+
+    // Admin status notification
+    socket.on("adminStatus", status => {
+      console.log("adminStatus", status);
+      isAdmin = status;
+    });
+
+    // Error handling for invalid room codes
+    socket.on("error", msg => {
+      console.log("error", msg);
+      const errorEl = document.getElementById("errorMsg");
+      if (errorEl) {
+        errorEl.textContent = msg;
+      } else {
+        alert(msg);
+      }
+    });
+
+    socket.on("lobbyUpdate", players => {
+      console.log("lobbyUpdate", players);
+      // Only reset currentGame if we are actually at the lobby screen
+      if (!currentGame) currentGame = null;
+
+      // If we are currently in a game, don't overwrite the UI during settings updates
+      if (currentGame) return;
+
+      const me = players.find(p => p.id === socket.id);
+      const myReady = me ? me.ready : false;
+
+      let html = `
+    <h3>Lobby</h3>
+    ${players.map(p => `<div>${p.isAdmin ? '<span class="admin-badge">👑 ADMIN</span> ' : ''}${p.name} ${p.ready ? "✅ Ready" : "⏳ Waiting"}</div>`).join("")}
+    <br>
+    <button id="readyBtn" style="background:${myReady ? '#a44' : '#4a4'}; color:white; border:none; border-radius:5px;">
+      ${myReady ? "❌ Cancel Ready" : "✅ I'm READY"}
+    </button>
+  `;
+
+      // Admin game selection
+      if (isAdmin) {
+        html += `
+    <div class="admin-controls">
+      <div style="color:#ffd700;margin-bottom:10px;">👑 Admin Controls</div>
+      <div>Choose a game to start:</div>
+      <button class="game-select-btn" id="startRaceBtn">🏎️<br>Traffic Racer</button>
+      <button class="game-select-btn" id="startFpsBtn">🔫<br>FPS Arena</button>
+    </div>
+    `;
+      } else {
+        html += `<div style="margin-top:20px;color:#888;">Waiting for admin to start game...</div>`;
+      }
+
+      ui.innerHTML = html;
+
+      document.getElementById("readyBtn").onclick = () => {
+        socket.emit(myReady ? "unready" : "ready");
+      };
+
+      if (isAdmin) {
+        document.getElementById("startRaceBtn").onclick = () => {
+          socket.emit("startGame", "race");
+        };
+        document.getElementById("startFpsBtn").onclick = () => {
+          socket.emit("startGame", "fps");
+        };
+      }
+    });
+
+    socket.on("setGame", payload => {
+      console.log("setGame", payload);
+      const { game, winCondition, players, map } = payload;
+      currentGame = game;
+
+      if (game === "race") raceUI();
+      if (game === "fps") fpsUI(winCondition, players, map);
+    });
+
+    socket.on("returnToLobby", players => {
+      console.log("returnToLobby", players);
+      currentGame = null;
+      // Trigger lobby UI
+      socket.emit("ready"); // This will trigger lobbyUpdate
+    });
+
+
+    function raceUI() {
+      let isPaused = false;
+
+      ui.innerHTML = `
+    <style>
+      .race-controls { display: flex; flex-direction: column; gap: 15px; padding: 10px; }
+      .steering { display: flex; justify-content: center; gap: 30px; }
+      .pedals { display: flex; justify-content: center; gap: 20px; }
+      .steer-btn { width: 80px; height: 80px; font-size: 36px; border-radius: 50%; background: #333; color: white; border: 3px solid #666; }
+      .steer-btn:active { background: #555; }
+      .gas-btn { width: 120px; height: 100px; font-size: 24px; background: linear-gradient(#4a4, #282); color: white; border: none; border-radius: 10px; }
+      .gas-btn:active { background: linear-gradient(#5b5, #393); }
+      .brake-btn { width: 120px; height: 100px; font-size: 24px; background: linear-gradient(#a44, #622); color: white; border: none; border-radius: 10px; }
+      .brake-btn:active { background: linear-gradient(#b55, #733); }
+      .game-title { color: #4a4; font-size: 18px; }
+      .game-menu { display: flex; justify-content: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+      .pause-btn { background: linear-gradient(#aa8800, #664400); }
+      .pause-btn.paused { background: linear-gradient(#00aa44, #006622); }
+    </style>
+    <div class="race-controls">
+      <div class="game-title">🏎️ TRAFFIC RACER</div>
+      <div class="steering">
+        <button class="steer-btn" id="leftBtn">◀</button>
+        <button class="steer-btn" id="rightBtn">▶</button>
+      </div>
+      <div class="pedals">
+        <button class="brake-btn" id="brakeBtn">🛑<br>BRAKE</button>
+        <button class="gas-btn" id="gasBtn">⚡<br>GAS</button>
+      </div>
+      ${isAdmin ? `
+      <div class="game-menu">
+        <button class="menu-btn pause-btn" id="pauseBtn">⏸️ Pause</button>
+        <button class="menu-btn restart" id="restartBtn">🔄 Restart</button>
+        <button class="menu-btn exit" id="exitBtn">🚪 Exit</button>
+      </div>
+      ` : ''}
+    </div>
+  `;
+      // Continuous input while holding buttons
+      setupHoldButton('leftBtn', { left: 1 });
+      setupHoldButton('rightBtn', { right: 1 });
+      setupHoldButton('gasBtn', { gas: 1 });
+      setupHoldButton('brakeBtn', { brake: 1 });
+
+      // Admin controls
+      if (isAdmin) {
+        const pauseBtn = document.getElementById('pauseBtn');
+        pauseBtn.onclick = () => {
+          isPaused = !isPaused;
+          send({ pause: isPaused });
+          pauseBtn.innerHTML = isPaused ? '▶️ Resume' : '⏸️ Pause';
+          pauseBtn.classList.toggle('paused', isPaused);
+        };
+        document.getElementById('restartBtn').onclick = () => socket.emit('restartGame');
+        document.getElementById('exitBtn').onclick = () => socket.emit('exitGame');
+      }
+    }
+
+    let holdIntervals = {};
+
+    function setupHoldButton(btnId, data) {
+      const btn = document.getElementById(btnId);
+      if (!btn) return;
+
+      const startHold = (e) => {
+        e.preventDefault();
+        send(data);
+        holdIntervals[btnId] = setInterval(() => send(data), 80);
+      };
+
+      const stopHold = (e) => {
+        e.preventDefault();
+        if (holdIntervals[btnId]) {
+          clearInterval(holdIntervals[btnId]);
+          delete holdIntervals[btnId];
+        }
+      };
+
+      btn.addEventListener('mousedown', startHold);
+      btn.addEventListener('mouseup', stopHold);
+      btn.addEventListener('mouseleave', stopHold);
+      btn.addEventListener('touchstart', startHold);
+      btn.addEventListener('touchend', stopHold);
+      btn.addEventListener('touchcancel', stopHold);
+    }
+
+    function fpsUI(initialWinCondition, players, initialMap) {
+      let isPaused = false;
+
+      const me = players ? players.find(p => p.id === socket.id) : null;
+      const initialKills = me ? me.kills : 0;
+      const initialDeaths = me ? me.deaths : 0;
+
+      ui.innerHTML = `
+    <style>
+      .score-box { background: rgba(0,0,0,0.6); padding: 8px; border-radius: 8px; margin-bottom: 10px; font-weight: bold; color: #ffcc00; text-align: center; font-size: 1.2rem; }
+      .fps-controls { 
+        display: flex; 
+        flex-direction: column; 
+        gap: 5px; 
+        padding: 5px; 
+        height: 100vh;
+        width: 100vw;
+        position: fixed;
+        top: 0;
+        left: 0;
+        user-select: none;
+        touch-action: none;
+        overflow: hidden;
+      }
+      .game-title { color: #f44; font-size: 14px; margin: 2px 0; text-align: center; }
+      
+      #controls-layout {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end; /* Align joysticks and buttons to bottom */
+        flex: 1;
+        padding: 0 10px 20px 10px;
+        position: relative;
+      }
+
+      .joystick-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+        position: relative;
+      }
+
+      .joystick-base {
+        width: 130px;
+        height: 130px;
+        background: rgba(255,255,255,0.05);
+        border: 2px solid rgba(255,255,255,0.15);
+        border-radius: 50%;
+        position: relative;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      .joystick-stick {
+        width: 65px;
+        height: 65px;
+        background: rgba(255,255,255,0.25);
+        border-radius: 50%;
+        position: absolute;
+        box-shadow: 0 0 15px rgba(0,0,0,0.5);
+      }
+
+      .action-btn {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        border: none;
+        color: white;
+        font-weight: bold;
+        font-size: 16px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: absolute;
+        bottom: -10px;
+        z-index: 100;
+        text-transform: uppercase;
+      }
+
+      .jump-btn {
+        background: linear-gradient(#44aa44, #226622);
+        left: 100px; /* Now on the left side (Move) */
+      }
+      .jump-btn:active { transform: scale(0.9) translate(0, 5px); background: #4f4; }
+
+      .fire-btn {
+        background: radial-gradient(circle, #ff4444, #990000);
+        right: 100px; /* Now on the right side (Aim) */
+      }
+      .fire-btn:active { transform: scale(0.9) translate(0, 5px); background: #f00; }
+
+      .label { color: #666; font-size: 10px; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 1px; }
+
+      .game-menu { 
+        display: flex; 
+        justify-content: center; 
+        gap: 5px; 
+        padding: 5px;
+        background: rgba(0,0,0,0.5);
+      }
+    </style>
+      <div class="fps-controls">
+        <div class="score-box">
+          <span id="stat-kills">${initialKills}</span> KILLS | <span id="stat-deaths">${initialDeaths}</span> DEATHS
+        </div>
+        <div class="game-title">🔫 FPS ARENA 3D</div>
+
+        <div id="controls-layout">
+          <!-- Move Area -->
+          <div class="joystick-container">
+            <div class="label">Move</div>
+            <div class="joystick-base" id="moveBase">
+              <div class="joystick-stick" id="moveStick"></div>
+            </div>
+            <button class="action-btn jump-btn" id="btn-jump">JUMP</button>
+          </div>
+
+          <!-- Aim Area -->
+          <div class="joystick-container">
+            <div class="label">Aim</div>
+            <div class="joystick-base" id="lookBase">
+              <div class="joystick-stick" id="lookStick"></div>
+            </div>
+            <button class="action-btn fire-btn" id="btn-fire">FIRE</button>
+          </div>
+        </div>
+
+      ${isAdmin ? `
+      <div class="game-menu">
+        <div style="background: rgba(0,0,0,0.4); padding: 5px; border-radius: 5px; margin-right: 10px; display: flex; align-items: center; gap: 5px;">
+          <span style="font-size: 10px; color: #aaa;">GOAL:</span>
+          <select id="win-condition-select" onchange="updateSettings()" style="padding: 2px; border-radius: 3px; background: #222; color: white; border: 1px solid #444; font-size: 11px;">
+            <option value="5">5 Kills</option>
+            <option value="10">10 Kills</option>
+            <option value="15">15 Kills</option>
+            <option value="20">20 Kills</option>
+          </select>
+        </div>
+        <div style="background: rgba(0,0,0,0.4); padding: 5px; border-radius: 5px; margin-right: 10px; display: flex; align-items: center; gap: 5px;">
+          <span style="font-size: 10px; color: #aaa;">MAP:</span>
+          <select id="map-select" onchange="updateSettings()" style="padding: 2px; border-radius: 3px; background: #222; color: white; border: 1px solid #444; font-size: 11px;">
+            <option value="map1">Classic</option>
+            <option value="map2">Iceworld</option>
+            <option value="map3">Orange Arena</option>
+          </select>
+        </div>
+        <button class="menu-btn pause-btn" id="pauseBtn">⏸️ Pause</button>
+        <button class="menu-btn restart" id="restartBtn">🔄 Restart</button>
+        <button class="menu-btn exit" id="exitBtn">🚪 Exit</button>
+      </div>
+      ` : ''}
+    </div>
+  `;
+
+      if (isAdmin && initialWinCondition) {
+        document.getElementById('win-condition-select').value = initialWinCondition;
+      }
+      if (isAdmin && initialMap) {
+        document.getElementById('map-select').value = initialMap;
+      }
+
+      setupJoystick('moveBase', 'moveStick', (v) => {
+        send({ moveX: v.x, moveY: v.y });
+      });
+
+      setupJoystick('lookBase', 'lookStick', (v) => {
+        send({ lookX: v.x, lookY: v.y });
+      });
+
+      // Jump button
+      document.getElementById('btn-jump').onclick = () => {
+        send({ jump: true });
+      };
+
+      // Fire button (Hold support)
+      setupHoldButton('btn-fire', { shoot: 1 });
+
+      if (isAdmin) {
+        const pauseBtn = document.getElementById('pauseBtn');
+        pauseBtn.onclick = () => {
+          isPaused = !isPaused;
+          send({ pause: isPaused });
+          pauseBtn.innerHTML = isPaused ? '▶️ Resume' : '⏸️ Pause';
+          pauseBtn.classList.toggle('paused', isPaused);
+        };
+        document.getElementById('restartBtn').onclick = () => socket.emit('restartGame');
+        document.getElementById('exitBtn').onclick = () => socket.emit('exitGame');
+      }
+    }
+
+    function setupJoystick(baseId, stickId, callback) {
+      const base = document.getElementById(baseId);
+      const stick = document.getElementById(stickId);
+      let active = false;
+      const radius = 60;
+
+      const handleInput = (clientX, clientY) => {
+        if (!active) return;
+        const rect = base.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+
+        let dx = clientX - centerX;
+        let dy = clientY - centerY;
+
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > radius) {
+          dx = (dx / dist) * radius;
+          dy = (dy / dist) * radius;
+        }
+
+        stick.style.transform = `translate(${dx}px, ${dy}px)`;
+
+        // Normalize to -1 to 1
+        callback({ x: dx / radius, y: dy / radius });
+      };
+
+      // Touch events
+      base.addEventListener('touchstart', (e) => {
+        active = true;
+        e.preventDefault();
+        handleInput(e.targetTouches[0].clientX, e.targetTouches[0].clientY);
+      });
+      base.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        handleInput(e.targetTouches[0].clientX, e.targetTouches[0].clientY);
+      });
+      base.addEventListener('touchend', () => { active = false; stick.style.transform = `translate(0, 0)`; callback({ x: 0, y: 0 }); });
+      base.addEventListener('touchcancel', () => { active = false; stick.style.transform = `translate(0, 0)`; callback({ x: 0, y: 0 }); });
+
+      // Mouse events
+      base.addEventListener('mousedown', (e) => {
+        active = true;
+        handleInput(e.clientX, e.clientY);
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (active) handleInput(e.clientX, e.clientY);
+      });
+      window.addEventListener('mouseup', () => {
+        if (active) {
+          active = false;
+          stick.style.transform = `translate(0, 0)`;
+          callback({ x: 0, y: 0 });
+        }
+      });
+    }
+
+    socket.on("gameStartError", (msg) => { alert(msg); });
+
+    function updateSettings() {
+      const winCondition = parseInt(document.getElementById('win-condition-select').value);
+      const mapSelect = document.getElementById('map-select');
+      const map = mapSelect ? mapSelect.value : 'map1';
+      socket.emit("updateSettings", { winCondition, map });
+    }
+
+    socket.on("scoreUpdate", players => {
+      console.log("scoreUpdate received", players);
+      const me = players.find(p => p.id === socket.id);
+      if (me) {
+        const k = document.getElementById('stat-kills');
+        const d = document.getElementById('stat-deaths');
+        if (k) k.innerText = me.kills;
+        if (d) d.innerText = me.deaths;
+      }
+    });
+
+    function send(d) {
+      // console.log("send", d);
+      socket.emit("input", d);
+    }
+  </script>
+
+</body>
+
+</html>

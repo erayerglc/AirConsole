@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Host</title>
+  <style>
+    body {
+      background: #111;
+      color: white;
+      font-family: Arial;
+      margin: 0;
+      padding: 20px;
+    }
+
+    #lobby {
+      margin-bottom: 20px;
+    }
+
+    .room-code {
+      font-size: 48px;
+      font-weight: bold;
+      color: #4a4;
+      letter-spacing: 8px;
+      background: #222;
+      padding: 20px 40px;
+      border-radius: 10px;
+      display: inline-block;
+      margin: 10px 0;
+    }
+
+    .player-card {
+      display: inline-block;
+      background: #222;
+      padding: 10px 20px;
+      margin: 5px;
+      border-radius: 8px;
+      border-left: 4px solid #666;
+    }
+
+    .player-card.admin {
+      border-left-color: #ffd700;
+    }
+
+    .player-card.ready {
+      border-left-color: #4a4;
+    }
+
+    .waiting-msg {
+      color: #888;
+      font-style: italic;
+      margin-top: 20px;
+    }
+
+    #game {
+      display: block;
+      margin-top: 20px;
+      border-radius: 10px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    #scoreboard {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      border-radius: 8px;
+      color: white;
+      font-family: sans-serif;
+      z-index: 1001;
+      min-width: 150px;
+      display: none;
+    }
+
+    #winner-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.9);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 3000;
+      color: white;
+      font-size: 3rem;
+      text-shadow: 0 0 20px #00d2ff;
+    }
+
+    #winner-overlay button {
+      margin-top: 20px;
+      padding: 15px 30px;
+      font-size: 1.5rem;
+      background: #00d2ff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .target-info {
+      font-size: 24px;
+      color: #ffcc00;
+      margin-bottom: 15px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>🎮 AirConsole Replica - Host Screen</h2>
+  <div id="lobby">Loading...</div>
+  <div id="scoreboard"></div>
+  <div id="winner-overlay">
+    <div id="winner-text"></div>
+  </div>
+
+  <canvas id="game" width="900" height="500"></canvas>
+  <div id="game-3d"
+    style="width: 900px; height: 500px; border-radius: 10px; overflow: hidden; margin-top: 20px; position: relative;">
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/three.min.js"></script>
+  <script>
+    console.log("host loaded");
+
+    const socket = io();
+    window.socket = socket; // Expose globally for game engines
+    let currentWinCondition = 10;
+    let currentPlayers = [];
+    const gameCanvas = document.getElementById("game");
+    const game3d = document.getElementById("game-3d");
+    const lobby = document.getElementById("lobby");
+
+    socket.emit("createRoom");
+
+    socket.on("roomCreated", code => {
+      console.log("room", code);
+      roomCode = code;
+      showLobby(code, []);
+    });
+
+    function showLobby(code, players) {
+      document.getElementById('winner-overlay').style.display = 'none';
+      gameCanvas.classList.add("hidden");
+      game3d.classList.add("hidden");
+
+      let playersHtml = '';
+      if (players.length === 0) {
+        playersHtml = '<div class="waiting-msg">Waiting for players to join...</div>';
+      } else {
+        playersHtml = players.map(p => `
+          <div class="player-card ${p.isAdmin ? 'admin' : ''} ${p.ready ? 'ready' : ''}">
+            ${p.isAdmin ? '👑 ' : ''}${p.name} ${p.ready ? '✅' : '⏳'}
+          </div>
+        `).join('');
+      }
+
+      const joinUrl = `${window.location.origin}/controller.html?room=${code}`;
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(joinUrl)}`;
+
+      lobby.innerHTML = `
+        <div style="display: flex; justify-content: center; align-items: center; gap: 40px; margin-bottom: 20px;">
+          <div style="text-align: left;">
+            <div>Room Code:</div>
+            <div class="room-code">${code}</div>
+            <div style="margin-top:10px; color: #aaa;">Scan to join or go to:<br><strong>${window.location.host}/controller.html</strong></div>
+          </div>
+          <div style="background: white; padding: 10px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,210,255,0.3);">
+            <img src="${qrUrl}" alt="Join QR Code" style="display: block;">
+          </div>
+        </div>
+        <h3 style="margin-top:20px;">Players (${players.length}/4)</h3>
+        ${playersHtml}
+        <div class="waiting-msg" style="margin-top:20px;">
+          Admin will start the game from their controller
+        </div>
+      `;
+    }
+
+    function updateScoreboard(players) {
+      const sb = document.getElementById('scoreboard');
+      sb.innerHTML = `
+        <div style="font-weight:bold;margin-bottom:5px;border-bottom:1px solid #555;">KILLS / DEATHS</div>
+        ${players.map(p => `
+          <div style="display:flex;justify-content:space-between;gap:15px;">
+            <span>${p.name}</span>
+            <span>${p.kills} / ${p.deaths}</span>
+          </div>
+        `).join('')}
+      `;
+      sb.style.display = 'block';
+    }
+
+    socket.on("lobbyUpdate", players => {
+      console.log("lobbyUpdate", players);
+      currentPlayers = players;
+
+      // Clear alert if everyone is now ready
+      const unready = players.filter(p => !p.ready);
+      if (unready.length === 0) {
+        const errorDiv = document.getElementById('game-start-error');
+        if (errorDiv) errorDiv.classList.add('hidden');
+      }
+
+      if (roomCode) {
+        // Only show lobby if we're not currently in a game
+        if (gameCanvas.classList.contains('hidden') && game3d.classList.contains('hidden')) {
+          showLobby(roomCode, players);
+        }
+      }
+      if (document.getElementById('scoreboard').style.display === 'block') {
+        updateScoreboard(players);
+      }
+    });
+
+    socket.on("settingsUpdated", settings => {
+      currentWinCondition = settings.winCondition;
+
+      // If in lobby, update it
+      if (gameCanvas.classList.contains('hidden') && game3d.classList.contains('hidden')) {
+        if (roomCode) showLobby(roomCode, currentPlayers);
+      } else {
+        // If in game, show a notification on the host screen
+        const note = document.createElement('div');
+        note.className = 'target-info';
+        note.style.position = 'fixed';
+        note.style.bottom = '20px';
+        note.style.left = '50%';
+        note.style.transform = 'translateX(-50%)';
+        note.style.background = 'rgba(0, 210, 255, 0.8)';
+        note.style.color = 'white';
+        note.style.padding = '10px 20px';
+        note.style.borderRadius = '20px';
+        note.style.zIndex = '5000';
+        note.innerHTML = `🎯 Goal Updated: First to ${currentWinCondition} Kills`;
+        document.body.appendChild(note);
+        setTimeout(() => note.remove(), 3000);
+      }
+    });
+
+    socket.on("scoreUpdate", players => {
+      updateScoreboard(players);
+    });
+
+    socket.on("gameOver", payload => {
+      const overlay = document.getElementById('winner-overlay');
+      const text = document.getElementById('winner-text');
+      text.innerText = `🏆 ${payload.winner} WINS!`;
+      overlay.style.display = 'flex';
+      // Signal physics engine to stop
+      if (window.fpsGame) window.fpsGame.stop();
+    });
+
+    socket.on("gameStartError", msg => {
+      let errorDiv = document.getElementById('game-start-error');
+      if (!errorDiv) {
+        errorDiv = document.createElement('div');
+        errorDiv.id = 'game-start-error';
+        errorDiv.style.position = 'fixed';
+        errorDiv.style.top = '20px';
+        errorDiv.style.left = '50%';
+        errorDiv.style.transform = 'translateX(-50%)';
+        errorDiv.style.background = '#ff4444';
+        errorDiv.style.color = 'white';
+        errorDiv.style.padding = '20px 40px';
+        errorDiv.style.borderRadius = '12px';
+        errorDiv.style.fontWeight = 'bold';
+        errorDiv.style.fontSize = '24px';
+        errorDiv.style.zIndex = '2000';
+        errorDiv.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
+        errorDiv.style.textAlign = 'center';
+        document.body.appendChild(errorDiv);
+      }
+      errorDiv.innerText = msg;
+      errorDiv.classList.remove('hidden');
+      setTimeout(() => errorDiv.classList.add('hidden'), 5000);
+    });
+
+    socket.on("setGame", payload => {
+      console.log("setGame", payload);
+
+      const { game: gameType, players, map: mapName } = payload;
+      currentPlayers = players;
+
+      // Hide everything first
+      if (game && game.stop) game.stop();
+      document.getElementById('winner-overlay').style.display = 'none';
+      gameCanvas.classList.add("hidden");
+      game3d.classList.add("hidden");
+      game3d.innerHTML = "";
+      lobby.innerHTML = '<div style="color:#888;">Game in progress...</div>';
+
+      if (gameType === "race") {
+        gameCanvas.classList.remove("hidden");
+        const ctx = gameCanvas.getContext("2d");
+        ctx.fillStyle = "#222";
+        ctx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
+        import("./race.js").then(m => game = m.default(players));
+      }
+
+      if (gameType === "fps") {
+        game3d.classList.remove("hidden");
+        game3d.innerHTML = "";
+        game3d.style.position = 'relative';
+
+        if (typeof THREE === 'undefined') {
+          game3d.innerHTML = '<div style="color:red;padding:20px;">Error: Three.js library failed to load. Check your internet connection.</div>';
+          return;
+        }
+
+        // Overlay containers for each player (Radar, Damage Flash, Crosshair)
+        const uiContainer = document.createElement('div');
+        uiContainer.id = 'game-ui';
+        uiContainer.style.position = 'absolute';
+        uiContainer.style.top = '0';
+        uiContainer.style.left = '0';
+        uiContainer.style.width = '100%';
+        uiContainer.style.height = '100%';
+        uiContainer.style.pointerEvents = 'none';
+        uiContainer.style.zIndex = '100';
+        game3d.appendChild(uiContainer);
+
+        const updateUI = () => {
+          uiContainer.innerHTML = '';
+          const count = currentPlayers.length;
+          if (count === 0) return;
+
+          // Split logic: 1=Full, 2=Vertical (Stacked), 3-4=Grid
+          const cols = (count === 2) ? 1 : (count > 2 ? 2 : 1);
+          const rows = (count === 2) ? 2 : (count > 2 ? 2 : 1);
+          const w = 900 / cols;
+          const h = 500 / rows;
+
+          currentPlayers.forEach((p, i) => {
+            const viewport = document.createElement('div');
+            viewport.className = 'viewport-ui';
+
+            const col = (count === 2) ? 0 : (i % 2);
+            const row = (count === 2) ? i : (Math.floor(i / 2));
+
+            viewport.style.position = 'absolute';
+            viewport.style.left = `${col * w}px`;
+            viewport.style.top = `${row * h}px`;
+            viewport.style.width = `${w}px`;
+            viewport.style.height = `${h}px`;
+            uiContainer.appendChild(viewport);
+
+            // Crosshair
+            const ch = document.createElement('div');
+            ch.innerHTML = '+';
+            ch.style.position = 'absolute';
+            ch.style.left = '50%';
+            ch.style.top = '50%';
+            ch.style.transform = 'translate(-50%, -50%)';
+            ch.style.color = 'rgba(255, 255, 255, 0.8)';
+            ch.style.fontSize = '24px';
+            ch.style.fontWeight = 'bold';
+            viewport.appendChild(ch);
+
+            // Damage Flash (Blood)
+            const flash = document.createElement('div');
+            flash.id = `flash-${p.id}`;
+            flash.style.position = 'absolute';
+            flash.style.inset = '0';
+            flash.style.background = 'radial-gradient(circle, transparent 40%, rgba(200,0,0,0.5) 100%)';
+            flash.style.opacity = '0';
+            flash.style.transition = 'opacity 0.1s';
+            viewport.appendChild(flash);
+
+            // Individual Radar
+            const radar = document.createElement('canvas');
+            radar.id = `radar-${p.id}`;
+            radar.width = 130;
+            radar.height = 130;
+            radar.style.position = 'absolute';
+            radar.style.bottom = '15px';
+            radar.style.right = '15px';
+            radar.style.borderRadius = '50%';
+            radar.style.border = '3px solid white';
+            radar.style.background = 'rgba(0,0,0,0.6)';
+            viewport.appendChild(radar);
+          });
+        };
+        updateUI();
+
+        Promise.all([
+          import("./fps.js"),
+          import(`./maps/${mapName || 'map1'}.js`)
+        ])
+          .then(([m, mapModule]) => {
+            console.log("FPS Module and Map loaded:", mapName);
+            game = m.default(players, game3d, THREE, mapModule.default);
+          })
+          .catch(err => {
+            console.error(err);
+            game3d.innerHTML = `<div style="color:red;padding:20px;">Error Loading Game/Map: ${err.message}</div>`;
+          });
+      }
+    });
+
+    socket.on("returnToLobby", players => {
+      console.log("returnToLobby", players);
+      currentPlayers = players;
+      game = null;
+
+      // Hide game views
+      gameCanvas.classList.add("hidden");
+      game3d.classList.add("hidden");
+      game3d.innerHTML = "";
+
+      showLobby(roomCode, players);
+    });
+
+    socket.on("input", msg => {
+      if (game && game.input) {
+        try {
+          game.input(msg.player, msg.data);
+        } catch (e) { }
+      }
+    });
+  </script>
+
+</body>
+
+</html>
